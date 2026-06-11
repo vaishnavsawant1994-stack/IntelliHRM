@@ -167,9 +167,56 @@ async function processMedicalProof1HourWarnings() {
 }
 
 /**
+ * Automatically checks out employees whose shift has completed (>= 9 hours)
+ */
+async function autoCheckoutActiveShifts() {
+  try {
+    const now = new Date();
+    const nineHoursAgo = new Date(now.getTime() - 9 * 60 * 60 * 1000);
+
+    const activeAttendances = await prisma.attendance.findMany({
+      where: {
+        checkInTime: {
+          lte: nineHoursAgo,
+          not: null,
+        },
+        checkOutTime: null,
+        status: AttendanceStatus.PRESENT,
+      },
+    });
+
+    if (activeAttendances.length === 0) return;
+
+    console.log(`[Scheduler] Found ${activeAttendances.length} active shifts to auto-checkout...`);
+
+    for (const record of activeAttendances) {
+      if (!record.checkInTime) continue;
+      const checkOutTime = new Date(record.checkInTime.getTime() + 9 * 60 * 60 * 1000);
+      
+      await prisma.attendance.update({
+        where: { id: record.id },
+        data: {
+          checkOutTime,
+          workedMinutes: 540,
+          todaysUpdate: record.todaysUpdate || "[Auto Checkout - 9 Hours Shift Completed]",
+        },
+      });
+      console.log(`[Scheduler] Auto-checked out employee ${record.employeeId} (attendance ID: ${record.id})`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Auto checkout active shifts job failed:", error);
+  }
+}
+
+/**
  * Initializes all automated background tasks (Cron Jobs)
  */
 export function initScheduler() {
+  // 🕒 Auto-Checkout Active Shifts: Run every minute
+  cron.schedule("* * * * *", async () => {
+    await autoCheckoutActiveShifts();
+  });
+
   // 🍱 Scheduled Lunch Break: 1:30 PM IST (Mon-Fri)
   cron.schedule("30 13 * * 1-5", async () => {
     console.log("[Scheduler] Triggering 1:30 PM Lunch Break Reminder...");
@@ -181,16 +228,7 @@ export function initScheduler() {
     timezone: "Asia/Kolkata"
   });
 
-  // ☕ Scheduled Break Reminder: 5:00 PM IST (Mon-Fri)
-  cron.schedule("0 17 * * 1-5", async () => {
-    console.log("[Scheduler] Triggering 5:00 PM Break Reminder...");
-    await broadcastBreakReminder(
-      "☕ Personal Break Time!",
-      "It's 5:00 PM. Time to step away and recharge. Would you like to start your break?"
-    );
-  }, {
-    timezone: "Asia/Kolkata"
-  });
+
 
   // 🕒 Automated Attendance Finalization: 12:00 AM IST daily
   // Runs at midnight to finalize the PREVIOUS day's records.

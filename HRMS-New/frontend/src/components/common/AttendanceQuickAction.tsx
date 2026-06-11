@@ -7,6 +7,7 @@ import { formatAttendanceTime } from "../../utils/format";
 import { FileText, ShieldCheck, Check } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import Modal from "./Modal";
+import { useApp } from "../../context/AppContext";
 
 type AttendanceQuickActionProps = {
   token: string | null;
@@ -30,6 +31,7 @@ export default function AttendanceQuickAction({
   const [attendanceToday, setAttendanceToday] = useState<Attendance | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState("");
+  const { isTimeDrifted } = useApp();
   const [now, setNow] = useState(() => Date.now());
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [assignedEmails, setAssignedEmails] = useState<any[]>([]);
@@ -104,7 +106,7 @@ export default function AttendanceQuickAction({
     [onStateChange],
   );
 
-  const loadAttendance = useCallback(async () => {
+  const loadAttendance = useCallback(async (shouldDispatch = false) => {
     if (!currentEmployeeId) {
       syncAttendanceState(null);
       return;
@@ -114,13 +116,19 @@ export default function AttendanceQuickAction({
     const versionAtStart = attendanceVersionRef.current;
 
     try {
-      const response = await apiRequest<SelfDashboardData>("/attendance/today", { token });
+      const response = await apiRequest<any>("/attendance/today", { token });
       if (requestId !== latestLoadRequestRef.current || versionAtStart !== attendanceVersionRef.current) {
         return;
       }
 
       const nextAttendance = response.data.attendanceToday ?? null;
+      if (nextAttendance) {
+        nextAttendance.overtimeSession = response.data.overtimeSession ?? null;
+      }
       syncAttendanceState(nextAttendance);
+      if (shouldDispatch) {
+        dispatchAttendanceUpdated(nextAttendance);
+      }
     } catch {
       if (requestId !== latestLoadRequestRef.current || versionAtStart !== attendanceVersionRef.current) {
         return;
@@ -184,7 +192,7 @@ export default function AttendanceQuickAction({
     return `${minutes}m`;
   }, [attendanceToday?.checkInTime, attendanceToday?.checkOutTime, now]);
   async function handleClick() {
-    if (!actionState.actionPath || actionState.disabled || submitting) {
+    if (!actionState.actionPath || actionState.disabled || submitting || isTimeDrifted) {
       return;
     }
 
@@ -194,7 +202,10 @@ export default function AttendanceQuickAction({
     }
 
     if (actionState.requiresConfirmation) {
-      const confirmMessage = `Are you sure you want to ${actionState.label.toLowerCase()} for today? This will start your attendance timer for the day.`;
+      let confirmMessage = `Are you sure you want to ${actionState.label.toLowerCase()}?`;
+      if (actionState.label === "Check in") {
+        confirmMessage = "Are you sure you want to check in? This will start your attendance timer for the day.";
+      }
 
       if (window.confirm(confirmMessage)) {
         await submitAction();
@@ -272,7 +283,7 @@ export default function AttendanceQuickAction({
   }
 
   async function submitAction(body: Record<string, any> = {}) {
-    if (!actionState.actionPath || actionState.disabled || submitting) {
+    if (!actionState.actionPath || actionState.disabled || submitting || isTimeDrifted) {
       return;
     }
 
@@ -284,12 +295,30 @@ export default function AttendanceQuickAction({
       // Update last activity before making the request
       updateLastActivity();
       
-      const response = await apiRequest<Attendance>(actionState.actionPath, {
+      const response = await apiRequest<any>(actionState.actionPath, {
         method: "POST",
         token,
         body,
       });
-      const nextAttendance = response.data;
+      
+      const data = response.data;
+      let nextAttendance = attendanceToday;
+      if (data && typeof data === "object") {
+        if ("attendanceDate" in data) {
+          nextAttendance = data;
+          if (attendanceToday) {
+            nextAttendance.overtimeSession = attendanceToday.overtimeSession;
+          }
+        } else if ("startTime" in data) {
+          if (nextAttendance) {
+            nextAttendance = {
+              ...nextAttendance,
+              overtimeSession: data,
+            };
+          }
+        }
+      }
+
       syncAttendanceState(nextAttendance);
       dispatchAttendanceUpdated(nextAttendance);
       void loadAttendance();
@@ -333,15 +362,15 @@ export default function AttendanceQuickAction({
           type="button"
           className={`attendance-quick-action attendance-quick-action--${size} ${actionState.toneClass} ${className}`.trim()}
           onClick={handleClick}
-          disabled={actionState.disabled || submitting}
-          aria-label={actionState.hint}
-          title={actionState.hint}
+          disabled={actionState.disabled || submitting || isTimeDrifted}
+          aria-label={isTimeDrifted ? "Your device clock is out of sync. Please enable automatic time synchronization to log attendance." : actionState.hint}
+          title={isTimeDrifted ? "Your device clock is out of sync. Please enable automatic time synchronization to log attendance." : actionState.hint}
         >
           {submitting ? "Updating..." : actionState.label}
         </button>
-        {actionError ? (
+        {(actionError || isTimeDrifted) ? (
           <p className="attendance-quick-action-error" role="alert">
-            {actionError}
+            {isTimeDrifted ? "Your device clock is out of sync. Please enable automatic time synchronization to log attendance." : actionError}
           </p>
         ) : null}
       </div>
