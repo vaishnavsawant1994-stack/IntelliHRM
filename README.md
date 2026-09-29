@@ -24,3 +24,7 @@ Read [HRMS-New/README.md](HRMS-New/README.md) for setup, features, and local-dev
 ## Recommended next work
 
 Compare all three HRMS repositories, preserve unique changes, and designate one canonical source of truth. If this repository remains active, consider moving the application to the root or documenting why the nested structure is intentional.
+
+## Repository family
+
+This repository is a nested-layout HRMS variant. For the recommended primary portfolio implementation, start with [HRMS-NEW](https://github.com/vaishnavsawant1994-stack/HRMS-NEW). Preserve and compare any unique changes here before consolidation or archival.
